@@ -1,0 +1,9 @@
+<config-template xmlns="http://tail-f.com/ns/config/1.0">
+  <makeloop xmlns="http://example.com/makeloop">
+    <name>{$INST}</name>
+    <dev1>{$DEV1}</dev1>
+    <dev2>{$DEV2}</dev2>
+    <dev1-loop>{$DEV1LOOP}</dev1-loop>
+    <dev2-loop>{$DEV2LOOP}</dev2-loop>
+  </makeloop>
+</config-template>
