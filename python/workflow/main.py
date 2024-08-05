@@ -1,6 +1,8 @@
 # -*- mode: python; python-indent: 4 -*-
 import ncs
-from ncs.application import Service
+from ncs.application import Service, PlanComponent
+from ncs.dp import Action
+import time
 
 
 # ------------------------
@@ -14,6 +16,13 @@ class ServiceCallbacks(Service):
     def cb_create(self, tctx, root, service, proplist):
         self.log.info('Service create(service=', service._path, ')')
 
+        # initialize plan
+        self.myplan = PlanComponent(service, 'bgpwork', 'workflow:type')
+        self.myplan.append_state('step1')
+        self.myplan.append_state('verify_IF')
+        self.myplan.append_state('step2')
+        self.myplan.append_state('post_check')
+
         vars = ncs.template.Variables()
         vars.add('INST', service.name)
         vars.add('DEV1', service.dev1)
@@ -24,12 +33,21 @@ class ServiceCallbacks(Service):
         template = ncs.template.Template(service)
 
         if service.step1:
+            self.myplan.set_reached('step1')
             template.apply('step1-makeloop', vars)
-        
-        if service.step2:
-            template.apply('step2-setbgp', vars)
 
-        
+        if service.verify_IF:
+            self.myplan.set_reached('verify_IF')
+
+        if service.step2:
+            if service.verify_IF:
+                self.myplan.set_reached('step2')
+                template.apply('step2-setbgp', vars)
+            else:
+                raise ValueError('Verify IF before execution.')  
+
+        if service.post_check:
+            self.myplan.set_reached('post_check')
 
     # The pre_modification() and post_modification() callbacks are optional,
     # and are invoked outside FASTMAP. pre_modification() is invoked before
@@ -68,6 +86,8 @@ class Main(ncs.application.Application):
 
         # When this setup method is finished, all registrations are
         # considered done and the application is 'started'.
+        self.register_action('wf-checkBGP-point', WFCheckBGPAction)
+        self.register_action('wf-pingLoopback-point', WFpingLoopbackAction)
 
     def teardown(self):
         # When the application is finished (which would happen if NCS went
@@ -75,3 +95,176 @@ class Main(ncs.application.Application):
         # method will be called.
 
         self.log.info('Main FINISHED')
+
+class WFCheckBGPAction(Action):
+    @Action.action
+    def cb_action(self, uinfo, name, kp, input, output):
+        self.log.info('checkBGP Action called (service=)', kp, ')')
+        with ncs.maapi.single_read_trans(uinfo.username, uinfo.context) as trans:
+            # get root path
+            root = ncs.maagic.get_root(trans, kp)
+            service = ncs.maagic.cd(root, kp)
+
+            # get addresses
+            dev1 = service.dev1
+            dev2 = service.dev2    
+            dev1loop = service.dev1_loop
+            dev2loop = service.dev2_loop
+
+            self.log.info("dev1loop = ",dev1loop)
+            self.log.info("dev2loop = ",dev2loop)
+
+            count_result = 0
+
+            count = 0
+            while count < 5:
+            # check BGP status
+                if self.check_bgp(trans, dev1, dev2loop):
+                    msg = "BGP session to "+dev2loop+" is Established!"
+                    count_result += 1
+                    break
+                else:
+                    msg = "BGP session to "+dev2loop+" is down..."
+                    count += 1
+                    time.sleep(5)
+            output.dev1 = msg
+
+            count = 0
+            while count < 5:
+                if self.check_bgp(trans, dev2, dev1loop):
+                    msg = "BGP session to "+dev1loop+" is Established!"
+                    count_result += 1
+                    break
+                else:
+                    msg = "BGP session to "+dev1loop+" is down..."
+                    count += 1
+                    time.sleep(5)
+            output.dev2 = msg
+
+            if count_result == 2:
+                output.result = True      
+
+        if output.result:
+            #self.log.info("output.result == True")
+            with ncs.maapi.single_write_trans(uinfo.username, uinfo.context) as trans:
+                # get root path
+                root = ncs.maagic.get_root(trans, kp)
+                service = ncs.maagic.cd(root, kp)
+
+                #self.log.info(service.post_check)
+                # trigger next stage
+                service.post_check = True
+                #self.log.info(service.post_check)
+                trans.apply()
+
+    def check_bgp(self, trans, dev_name, bgp_nbr_addr):
+        root = ncs.maagic.get_root(trans)
+        device = root.ncs__devices.device[dev_name]
+        ret = False
+        try:
+            command = "show bgp neighbor brief"
+            #self.log.info('command: ', command)
+            live_input = device.live_status.cisco_ios_xr_stats__exec.any.get_input()
+            live_input.args = [command]
+            output = device.live_status.cisco_ios_xr_stats__exec.any(live_input)
+            #self.log.info("bgp_status output: ", output)
+            #self.log.info("bgp_nbr_addr: ", bgp_nbr_addr)
+
+            # parse output
+            for line in output.result.split("\n"):
+                if len(line)>0:
+                    # if line start with the number, the line is neighbor info
+                    words = line.split(" ")
+                    #self.log.info(words)
+                    #self.log.info("words[0]: ", words[0])
+                    if bgp_nbr_addr in words[0] and "Established" in words[-2]:
+                        ret = True
+                        self.log.info("BGP session to ", bgp_nbr_addr, "is Established!")
+
+            if ret == False:
+                self.log.info("BGP session to ", bgp_nbr_addr, "is down...")
+
+        except Exception as e:
+            self.log.info(dev_name, " command error: ", str(e))
+
+        return ret
+    
+
+class WFpingLoopbackAction(Action):
+    @Action.action
+    def cb_action(self, uinfo, name, kp, input, output):
+        self.log.info('PING Action called (service=)', kp, ')')
+        with ncs.maapi.single_read_trans(uinfo.username, uinfo.context) as trans:
+            # get root path
+            root = ncs.maagic.get_root(trans, kp)
+            service = ncs.maagic.cd(root, kp)
+
+            # get addresses
+            dev1 = service.dev1
+            dev2 = service.dev2
+            dev1loop = service.dev1_loop
+            dev2loop = service.dev2_loop
+
+            self.log.info("dev1loop = ",dev1loop)
+            self.log.info("dev2loop = ",dev2loop)
+
+            output.result = False
+            count = 0
+
+            # execute Ping
+            if self.ping_Loopback(trans, dev1, dev2loop):
+                msg = "Ping to "+dev2loop+" succeeded!"
+                count += 1
+            else:
+                msg = "Ping to "+dev2loop+" failed!"
+            output.dev1 = msg
+
+            if self.ping_Loopback(trans, dev2, dev1loop):
+                msg = "Ping to "+dev1loop+" succeeded!"
+                count += 1
+            else:
+                msg = "Ping to "+dev1loop+" failed!"
+            output.dev2 = msg
+
+            if count == 2:
+                output.result = True
+
+        if output.result:
+            #self.log.info("output.result == True")
+            with ncs.maapi.single_write_trans(uinfo.username, uinfo.context) as trans:
+                # get root path
+                root = ncs.maagic.get_root(trans, kp)
+                service = ncs.maagic.cd(root, kp)
+
+                #self.log.info(service.verify_IF)
+                # trigger next stage
+                service.verify_IF = True
+                #self.log.info(service.verify_IF)
+                trans.apply()
+
+    def ping_Loopback(self, trans, dev_name, loopaddr):
+        root = ncs.maagic.get_root(trans)
+        device = root.ncs__devices.device[dev_name]
+        ret = False
+        try:
+            command = "ping "+loopaddr
+            #self.log.info('command: ', command)
+            live_input = device.live_status.cisco_ios_xr_stats__exec.any.get_input()
+            live_input.args = [command]
+            output = device.live_status.cisco_ios_xr_stats__exec.any(live_input)
+            #self.log.info("bgp_status output: ", output)
+            #self.log.info("loopaddr: ", loopaddr)
+
+            # parse output
+            for line in output.result.split("\n"):
+                #self.log.info(line)
+                if len(line)>0:
+                    # if line start with the number, the line is neighbor info
+                    if "!!" in line:
+                        ret = True
+                        self.log.info("ping from ", dev_name, " to ", loopaddr, " succeeded!")
+
+        except Exception as e:
+            self.log.info(dev_name, " command error: ", str(e))
+
+        return ret

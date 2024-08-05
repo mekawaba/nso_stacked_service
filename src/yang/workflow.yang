@@ -21,6 +21,34 @@ module workflow {
       "Initial revision.";
   }
 
+///////// Plan states ////////
+  identity type {
+    description "plan component type";
+    base ncs:plan-component-type;
+  }
+
+  identity step1 {
+    description "Created Loopback IF";
+    base ncs:plan-state;
+  }
+
+  identity verify_IF {
+    description "Check IF is created";
+    base ncs:plan-state;
+  }
+
+  identity step2 {
+    description "Set BGP";
+    base ncs:plan-state;
+  }
+
+  identity post_check {
+    description "Confirmed everything is done!";
+    base ncs:plan-state;
+  }
+
+  ///////// Plan states ////////
+
   list workflow {
     description "This is an RFS skeleton service";
 
@@ -31,6 +59,7 @@ module workflow {
       type string;
     }
 
+    uses ncs:plan-data;
     uses ncs:service-data;
     ncs:servicepoint workflow-servicepoint;
 
@@ -64,9 +93,50 @@ module workflow {
       type boolean;
       default false;
     }
+    leaf verify_IF {
+      type boolean;
+      default false;
+    }
     leaf step2 {
       type boolean;
       default false;
+    }
+    leaf post_check {
+      type boolean;
+      default false;
+    }
+
+    // Action YANG
+    tailf:action checkBGP {
+      tailf:info "Check BGP stetus";
+      tailf:actionpoint wf-checkBGP-point;
+      output{
+        leaf dev1 {
+          type string;
+        }
+        leaf dev2 {
+          type string;
+        }
+        leaf result {
+            type boolean;
+        }
+      }
+    }
+
+    tailf:action pingLoopback {
+      tailf:info "Check Loopback reachability";
+      tailf:actionpoint wf-pingLoopback-point;
+      output{
+        leaf dev1 {
+          type string;
+        }
+        leaf dev2 {
+          type string;
+        }
+        leaf result {
+            type boolean;
+        }
+      }
     }
   }
 }
