@@ -1,0 +1,20 @@
+<config-template xmlns="http://tail-f.com/ns/config/1.0">
+  <kickers xmlns="http://tail-f.com/ns/kicker">
+    <data-kicker>
+      <id>{$INST}-1</id>
+      <monitor>/workflow[name='{$INST}']/plan/component[name='bgpwork']/state[name='workflow:step1']</monitor>
+      <trigger-expr>status='reached'</trigger-expr>
+      <trigger-type>enter</trigger-type>
+      <kick-node xmlns:workflow="http://example.com/workflow">/workflow:workflow[workflow:name='{$INST}']</kick-node>
+      <action-name>pingLoopback</action-name>
+    </data-kicker>
+    <data-kicker>
+      <id>{$INST}-2</id>
+      <monitor>/workflow[name='{$INST}']/plan/component[name='bgpwork']/state[name='workflow:step2']</monitor>
+      <trigger-expr>status='reached'</trigger-expr>
+      <trigger-type>enter</trigger-type>
+      <kick-node xmlns:workflow="http://example.com/workflow">/workflow:workflow[workflow:name='{$INST}']</kick-node>
+      <action-name>checkBGP</action-name>
+    </data-kicker>
+  </kickers>
+</config-template>

@@ -17,11 +17,11 @@ class ServiceCallbacks(Service):
         self.log.info('Service create(service=', service._path, ')')
 
         # initialize plan
-        self.myplan = PlanComponent(service, 'bgpwork', 'workflow:type')
-        self.myplan.append_state('step1')
-        self.myplan.append_state('verify_IF')
-        self.myplan.append_state('step2')
-        self.myplan.append_state('post_check')
+        myplan = PlanComponent(service, 'bgpwork', 'workflow:type')
+        myplan.append_state('step1')
+        myplan.append_state('verify_IF')
+        myplan.append_state('step2')
+        myplan.append_state('post_check')
 
         vars = ncs.template.Variables()
         vars.add('INST', service.name)
@@ -31,23 +31,28 @@ class ServiceCallbacks(Service):
         vars.add('DEV2LOOP', service.dev2_loop)
         vars.add('ASNUM', service.asnum)
         template = ncs.template.Template(service)
+        template.apply('workflow-template-kickers', vars)
 
         if service.step1:
-            self.myplan.set_reached('step1')
+            myplan.set_reached('step1')
             template.apply('step1-makeloop', vars)
+        else:
+            service.verify_IF = False
 
         if service.verify_IF:
-            self.myplan.set_reached('verify_IF')
+            myplan.set_reached('verify_IF')
 
         if service.step2:
             if service.verify_IF:
-                self.myplan.set_reached('step2')
+                myplan.set_reached('step2')
                 template.apply('step2-setbgp', vars)
             else:
                 raise ValueError('Verify IF before execution.')  
+        else:
+            service.post_check = False
 
         if service.post_check:
-            self.myplan.set_reached('post_check')
+            myplan.set_reached('post_check')
 
     # The pre_modification() and post_modification() callbacks are optional,
     # and are invoked outside FASTMAP. pre_modification() is invoked before
@@ -100,10 +105,13 @@ class WFCheckBGPAction(Action):
     @Action.action
     def cb_action(self, uinfo, name, kp, input, output):
         self.log.info('checkBGP Action called (service=)', kp, ')')
-        with ncs.maapi.single_read_trans(uinfo.username, uinfo.context) as trans:
+        #with ncs.maapi.single_read_trans(uinfo.username, uinfo.context) as trans:
+        with ncs.maapi.single_read_trans('admin', 'python') as trans:
             # get root path
             root = ncs.maagic.get_root(trans, kp)
             service = ncs.maagic.cd(root, kp)
+
+            maapi = ncs.maagic.get_maapi(root)
 
             # get addresses
             dev1 = service.dev1
@@ -120,11 +128,13 @@ class WFCheckBGPAction(Action):
             while count < 5:
             # check BGP status
                 if self.check_bgp(trans, dev1, dev2loop):
-                    msg = "BGP session to "+dev2loop+" is Established!"
+                    msg = f"BGP session to {dev2loop} is Established!"
+                    maapi.prio_message('admin', '\n'+msg)
                     count_result += 1
                     break
                 else:
-                    msg = "BGP session to "+dev2loop+" is down..."
+                    msg = f"BGP session to {dev2loop} is down..."
+                    maapi.prio_message('admin', '\n'+msg)
                     count += 1
                     time.sleep(5)
             output.dev1 = msg
@@ -132,11 +142,13 @@ class WFCheckBGPAction(Action):
             count = 0
             while count < 5:
                 if self.check_bgp(trans, dev2, dev1loop):
-                    msg = "BGP session to "+dev1loop+" is Established!"
+                    msg = f"BGP session to {dev1loop} is Established!"
+                    maapi.prio_message('admin', '\n'+msg+'\n')
                     count_result += 1
                     break
                 else:
-                    msg = "BGP session to "+dev1loop+" is down..."
+                    msg = f"BGP session to {dev1loop} is down..."
+                    maapi.prio_message('admin', '\n'+msg+'\n')
                     count += 1
                     time.sleep(5)
             output.dev2 = msg
@@ -146,7 +158,8 @@ class WFCheckBGPAction(Action):
 
         if output.result:
             #self.log.info("output.result == True")
-            with ncs.maapi.single_write_trans(uinfo.username, uinfo.context) as trans:
+            #with ncs.maapi.single_write_trans(uinfo.username, uinfo.context) as trans:
+            with ncs.maapi.single_write_trans('admin', 'python') as trans:
                 # get root path
                 root = ncs.maagic.get_root(trans, kp)
                 service = ncs.maagic.cd(root, kp)
@@ -194,10 +207,13 @@ class WFpingLoopbackAction(Action):
     @Action.action
     def cb_action(self, uinfo, name, kp, input, output):
         self.log.info('PING Action called (service=)', kp, ')')
-        with ncs.maapi.single_read_trans(uinfo.username, uinfo.context) as trans:
+        #with ncs.maapi.single_read_trans(uinfo.username, uinfo.context) as trans:
+        with ncs.maapi.single_read_trans('admin', 'python') as trans:
             # get root path
             root = ncs.maagic.get_root(trans, kp)
             service = ncs.maagic.cd(root, kp)
+
+            maapi = ncs.maagic.get_maapi(root)
 
             # get addresses
             dev1 = service.dev1
@@ -213,25 +229,32 @@ class WFpingLoopbackAction(Action):
 
             # execute Ping
             if self.ping_Loopback(trans, dev1, dev2loop):
-                msg = "Ping to "+dev2loop+" succeeded!"
+                #msg = "Ping to "+dev2loop+" succeeded!"
+                msg = f"Ping to {dev2loop} succeeded!"
+                maapi.prio_message('admin', '\n'+msg+'\n')
                 count += 1
             else:
-                msg = "Ping to "+dev2loop+" failed!"
-            output.dev1 = msg
+                msg = f"Ping to {dev2loop} failed!"
+                maapi.prio_message('admin', '\n'+msg+'\n')
+            #output.dev1 = msg
 
             if self.ping_Loopback(trans, dev2, dev1loop):
-                msg = "Ping to "+dev1loop+" succeeded!"
+                msg = f"Ping to {dev1loop} succeeded!"
+                maapi.prio_message('admin', '\n'+msg+'\n')
                 count += 1
             else:
-                msg = "Ping to "+dev1loop+" failed!"
-            output.dev2 = msg
+                msg = f"Ping to {dev1loop} failed!"
+                maapi.prio_message('admin', '\n'+msg+'\n')
+            #output.dev2 = msg
+
 
             if count == 2:
                 output.result = True
 
         if output.result:
             #self.log.info("output.result == True")
-            with ncs.maapi.single_write_trans(uinfo.username, uinfo.context) as trans:
+            #with ncs.maapi.single_write_trans(uinfo.username, uinfo.context) as trans:
+            with ncs.maapi.single_write_trans('admin', 'python') as trans:
                 # get root path
                 root = ncs.maagic.get_root(trans, kp)
                 service = ncs.maagic.cd(root, kp)
